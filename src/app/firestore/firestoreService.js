@@ -1,6 +1,30 @@
-import firebase from "../config/firebase";
+import {
+  getFirestore,
+  collection,
+  Timestamp,
+  doc,
+  addDoc,
+  setDoc,
+  getDoc,
+  getDocs,
+  arrayUnion,
+  arrayRemove,
+  updateDoc,
+  query,
+  orderBy,
+  where,
+  deleteDoc,
+  serverTimestamp,
+  increment,
+  writeBatch,
+  limit,
+  startAfter,
+} from "firebase/firestore";
+import { getAuth, updateProfile } from "firebase/auth";
+import { app } from "../config/firebase";
 
-const db = firebase.firestore();
+const db = getFirestore(app);
+const auth = getAuth(app);
 
 //firestoreから取得するデータ型を決める
 export function dataFromSnapshot(snapshot) {
@@ -10,7 +34,7 @@ export function dataFromSnapshot(snapshot) {
   //日付(timestampをJSに変換)
   for (const prop in data) {
     if (data.hasOwnProperty(prop)) {
-      if (data[prop] instanceof firebase.firestore.Timestamp) {
+      if (data[prop] instanceof Timestamp) {
         data[prop] = data[prop].toDate();
       }
     }
@@ -22,201 +46,158 @@ export function dataFromSnapshot(snapshot) {
   };
 }
 
-//eventsコレクションへDB接続
+//eventsコレクションのwhere句(フィルター機能)
 export function fetchEventsFromFirestore(
   filter,
   startDate,
-  limit,
+  pageSize,
   lastDocSnapshot = null
 ) {
-  const user = firebase.auth().currentUser;
-  let eventsRef = db
-    .collection("events")
-    .orderBy("date")
-    .orderBy("createdAt", "desc")
-    .startAfter(lastDocSnapshot)
-    .limit(limit);
+  const user = auth.currentUser;
+  const q = query(
+    collection(db, "events"),
+    orderBy("date"),
+    orderBy("createdAt", "desc"),
+    startAfter(lastDocSnapshot),
+    limit(pageSize)
+  );
   switch (filter) {
     case "engineer":
-      return eventsRef
-        .where("career", "array-contains", "エンジニア")
-        .where("date", "<=", startDate);
-    // .where("createdAt", "<=", predicate.get("startDate"));
+      return query(q, where("career", "array-contains", "エンジニア"));
     case "designer":
-      return eventsRef
-        .where("career", "array-contains", "デザイナー")
-        .where("date", "<=", startDate);
-    // .where("createdAt", "<=", predicate.get("startDate"));
+      return query(q, where("career", "array-contains", "デザイナー"));
     case "isHosting":
-      return eventsRef
-        .where("hostUid", "==", user.uid)
-        .where("date", "<=", startDate);
-    // .where("createdAt", "<=", predicate.get("startDate"));
-    // .where("date", ">=", predicate.get("startDate"));
-
-    // case "isGoing":
-    //   return eventsRef
-    //   .where('attendeeIds','array-contains',user.uid)
+      return query(q, where("hostUid", "==", user.uid));
     default:
-      // return eventsRef;
-      // return eventsRef.where(
-      //   ("createdAt", "desc"),
-      //   "=>",
-      //   predicate.get("startDate")
-      // );
-      return eventsRef.where("date", "<=", startDate);
+      return query(q);
   }
 }
 
-//eventsコレクションへDB接続(idバージョン)
+//イベントを取得 =id（単一documentへの参照を取得）
 export function listenToEventFromFirestore(eventId) {
-  return db.collection("events").doc(eventId);
+  return doc(db, "events", eventId);
 }
 
-//firestore作成関数(eventsコレクションに参加者を追加する)
+//イベントコレクションにドキュメント追加
 export function addEventToFirestore(event) {
-  const user = firebase.auth().currentUser;
-  return db.collection("events").add({
+  const user = auth.currentUser;
+  return addDoc(collection(db, "events"), {
     ...event,
     hostUid: user.uid,
     hostedBy: user.displayName,
     hostPhotoURL: user.photoURL || null,
-    attendees: firebase.firestore.FieldValue.arrayUnion({
+    attendees: arrayUnion({
       id: user.uid,
       displayName: user.displayName,
       photoURL: user.photoURL || null,
     }),
-    attendeeIds: firebase.firestore.FieldValue.arrayUnion(user.uid),
-    // career: firebase.firestore.FieldValue.arrayUnion(),
-    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    attendeeIds: arrayUnion(user.uid),
+    createdAt: serverTimestamp(),
   });
 }
 
-//firestore更新関数
+//イベントコレクション更新
 export function updateEventInFirestore(event) {
-  return db.collection("events").doc(event.id).update(event);
+  const eventDoc = doc(db, "events", event.id);
+  return updateDoc(eventDoc, event);
 }
 
-//firestore削除関数
+//イベントコレクション削除
 export function deleteEventInFirestore(eventId) {
-  return db.collection("events").doc(eventId).delete();
+  return deleteDoc(doc(db, "events", eventId));
 }
 
 //イベントのキャンセル
 export function cancelEventToggle(event) {
-  return db.collection("events").doc(event.id).update({
+  const eventDoc = doc(db, "events", event.id);
+  return updateDoc(eventDoc, {
     isCancelled: !event.isCancelled,
   });
 }
 
-//新規登録時のユーザー設定
+//ユーザー情報登録
 export function setUserProfileData(user) {
-  return db
-    .collection("users")
-    .doc(user.uid)
-    .set({
-      displayName: user.displayName,
-      email: user.email,
-      photoURL: user.photoURL || null,
-      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-    });
+  return setDoc(doc(db, "users", user.uid), {
+    displayName: user.displayName,
+    email: user.email,
+    photoURL: user.photoURL || null,
+    createdAt: serverTimestamp(),
+  });
 }
 
-//ユーザープロフィール
+//ユーザー情報取得
 export function getUserProfile(userId) {
-  return db.collection("users").doc(userId);
+  return doc(db, "users", userId);
 }
 
-//プロフィール更新(displayNameで判別)
+//ユーザー情報更新
 export async function updateUserProfile(profile) {
-  const user = firebase.auth().currentUser;
+  const user = auth.currentUser;
   try {
     if (user.displayName !== profile.displayName) {
-      await user.updateProfile({
+      updateProfile(user, {
         displayName: profile.displayName,
       });
     }
-    return await db.collection("users").doc(user.uid).update(profile);
+    return await updateDoc(doc(db, "users", user.uid), profile);
   } catch (error) {
     throw error;
   }
 }
 
-//firestore usersコレクションに画像を保存
+//ユーザー画像保存（photoコレクションに追加）
 export async function updateUserProfilePhoto(downloadURL, filename) {
-  const user = firebase.auth().currentUser;
-  const userDocRef = db.collection("users").doc(user.uid);
+  const user = auth.currentUser;
+  const userDocRef = doc(db, "users", user.uid);
   try {
-    const userDoc = await userDocRef.get();
+    const userDoc = await getDoc(userDocRef);
     if (!userDoc.data().photoURL) {
-      await db.collection("users").doc(user.uid).update({
+      await updateDoc(userDocRef, {
         photoURL: downloadURL,
       });
-      await user.updateProfile({
+      await updateProfile(user, {
         photoURL: downloadURL,
       });
     }
-    return await db.collection("users").doc(user.uid).collection("photos").add({
+    return await addDoc(collection(db, "users", user.uid, "photos"), {
       name: filename,
       url: downloadURL,
     });
   } catch (error) {
+    console.log("fserror", error);
     throw error;
   }
 }
 
-// firestore eventsコレクションに画像を保存
-export async function updateEventProfilePhoto(downloadURL,eventId) {
-  // const user = firebase.auth().currentUser;
-  const eventDocRef = db.collection("events").doc(eventId);
-  try {
-    const eventDoc = await eventDocRef.get();
-    if (!eventDoc.data().companyPhotoURL) {
-      await db.collection("events").doc(eventId).update({
-        companyPhotoURL: downloadURL,
-      });
-    }
-    return await db.collection("events").doc(eventId).add({
-      companyPhotoURL: downloadURL,
-    });
-  } catch (error) {
-    throw error;
-  }
-}
-
-//ユーザーの写真を取得
+//photoコレクション取得
 export function getUserPhotos(userUid) {
-  return db.collection("users").doc(userUid).collection("photos");
+  return collection(db, "users", userUid, "photos");
 }
-
-//会社の写真を取得
-export function getCompanyPhotos(eventId) {
-  return db.collection("events").doc(eventId);
-}
-
-
 
 //メイン写真の設定
 export async function setMainPhoto(photo) {
-  const user = firebase.auth().currentUser;
+  const user = auth.currentUser;
   const today = new Date();
-  const eventDocQuery = db
-    .collection("events")
-    .where("attendeeIds", "array-contains", user.uid)
-    .where("date", "<=", today);
-  const userFollowingRef = db
-    .collection("following")
-    .doc(user.uid)
-    .collection("userFollowing");
-
-  const batch = db.batch();
+  const eventDocQuery = query(
+    collection(db, "events"),
+    where("attendeeIds", "array-contains", user.uid),
+    where("date", "<=", today)
+  );
+  const userFollowingRef = collection(
+    db,
+    "following",
+    user.uid,
+    "userFollowing"
+  );
+  const batch = writeBatch(db);
 
   //写真の更新
-  batch.update(db.collection("users").doc(user.uid), {
+  batch.update(doc(db, "users", user.uid), {
     photoURL: photo.url,
   });
+
   try {
-    const eventsQuerySnap = await eventDocQuery.get();
+    const eventsQuerySnap = await getDocs(eventDocQuery);
     for (let i = 0; i < eventsQuerySnap.docs.length; i++) {
       let eventDoc = eventsQuerySnap.docs[i];
       //ホストユーザーの写真更新
@@ -235,21 +216,25 @@ export async function setMainPhoto(photo) {
         }),
       });
     }
+
     //フォローユーザーの写真更新
-    const userFollowingSnap = await userFollowingRef.get();
+    const userFollowingSnap = await getDocs(userFollowingRef);
     userFollowingSnap.docs.forEach((docRef) => {
-      let followingDocRef = db
-        .collection("following")
-        .doc(docRef.id)
-        .collection("userFollowers")
-        .doc(user.uid);
+      let followingDocRef = doc(
+        db,
+        "following",
+        docRef.id,
+        "userFollowers",
+        user.uid
+      );
       batch.update(followingDocRef, {
         photoURL: photo.url,
       });
     });
-    await batch.commit(); //バッチ処理
 
-    return await user.updateProfile({
+    await batch.commit();
+
+    return await updateProfile(user, {
       photoURL: photo.url,
     });
   } catch (error) {
@@ -257,135 +242,113 @@ export async function setMainPhoto(photo) {
   }
 }
 
-//firestore users,photoから画像を削除
+//ユーザー画像の削除
 export function deletePhotoFromCollection(photoId) {
-  const userUid = firebase.auth().currentUser.uid;
-  return db
-    .collection("users")
-    .doc(userUid)
-    .collection("photos")
-    .doc(photoId)
-    .delete();
+  const userUid = auth.currentUser.uid;
+  return deleteDoc(doc(db, "users", userUid, "photos", photoId));
 }
 
-//参加者追加（会社のメンバー追加）
+//メンバー追加
 export function addUserAttendance(event) {
-  const user = firebase.auth().currentUser;
-  return db
-    .collection("events")
-    .doc(event.id)
-    .update({
-      attendees: firebase.firestore.FieldValue.arrayUnion({
-        id: user.uid,
-        displayName: user.displayName,
-        photoURL: user.photoURL || null,
-      }),
-      attendeeIds: firebase.firestore.FieldValue.arrayUnion(user.uid),
-    });
+  const user = auth.currentUser;
+  return updateDoc(doc(db, "events", event.id), {
+    attendees: arrayUnion({
+      id: user.uid,
+      displayName: user.displayName,
+      photoURL: user.photoURL || null,
+    }),
+    attendeeIds: arrayUnion(user.uid),
+  });
 }
 
-//参加者キャンセル（会社のメンバー削除）
+//メンバーキャンセル
 export async function cancelUserAttendance(event) {
-  const user = firebase.auth().currentUser;
+  const user = auth.currentUser;
   try {
-    //参加中のメンバーを取得
-    const eventDoc = await db.collection("events").doc(event.id).get();
-    return db
-      .collection("events")
-      .doc(event.id)
-      .update({
-        attendeeIds: firebase.firestore.FieldValue.arrayRemove(user.uid),
-        attendees: eventDoc
-          .data()
-          .attendees.filter((attendee) => attendee.id !== user.uid),
-      });
+    const eventDoc = await getDoc(doc(db, "events", event.id));
+    return updateDoc(doc(db, "events", event.id), {
+      attendees: eventDoc
+        .data()
+        .attendees.filter((attendee) => attendee.id !== user.uid),
+      attendeeIds: arrayRemove(user.uid),
+    });
   } catch (error) {
     throw error;
   }
 }
 
-//おそらく使わない
+//イベントタブで使用（今は使わない）
 export function getUserEventsQuery(activeTab, userUid) {
-  let eventsRef = db.collection("events");
+  let eventsRef = collection(db, "events");
+  // const today = new Date();
   switch (activeTab) {
-    case 1: //past events
-      return eventsRef
-        .where("attendeeIds", "array-contains", userUid)
-        .orderBy("date", "desc");
-    case 2: //hosting
-      return eventsRef.where("hostUid", "==", userUid).orderBy("date");
+    case 1: // past events
+      return query(
+        eventsRef,
+        where("attendeeIds", "array-contains", userUid),
+        // where("date", "<=", today),
+        orderBy("date", "desc")
+      );
+    case 2: // hosted
+      return query(eventsRef, where("hostUid", "==", userUid), orderBy("date"));
     default:
-      return eventsRef
-        .where("attendeeIds", "array-contains", userUid)
-        .orderBy("date");
+      return query(
+        eventsRef,
+        where("attendeeIds", "array-contains", userUid),
+        // where("date", ">=", today),
+        orderBy("date")
+      );
   }
 }
 
 //フォローボタンを押したときのアクション
 export async function followUser(profile) {
-  const user = firebase.auth().currentUser;
-  const batch = db.batch(); //バッチ処理(一度に多くのユーザーのフォローアクションに対応)
+  const user = auth.currentUser;
+  const batch = writeBatch(db);
+  //バッチ処理(一度に多くのユーザーのフォローアクションに対応)
   try {
-    batch.set(
-      db
-        .collection("following")
-        .doc(user.uid)
-        .collection("userFollowing")
-        .doc(profile.id),
-      {
-        displayName: profile.displayName,
-        photoURL: profile.photoURL,
-        uid: profile.id,
-      }
-    );
-    batch.update(db.collection("users").doc(user.uid), {
-      followingCount: firebase.firestore.FieldValue.increment(1),
+    batch.set(doc(db, "following", user.uid, "userFollowing", profile.id), {
+      displayName: profile.displayName,
+      photoURL: profile.photoURL || "/assets/user.png",
+      uid: profile.id,
+    });
+
+    batch.update(doc(db, "users", user.uid), {
+      followingCount: increment(1),
     });
     return await batch.commit();
-  } catch (error) {
-    throw error;
+  } catch (e) {
+    throw e;
   }
 }
 
 //アンフォローボタンを押したときのアクション
 export async function unFollowUser(profile) {
-  const batch = db.batch();
-  const user = firebase.auth().currentUser;
+  const user = auth.currentUser;
+  const batch = writeBatch(db);
   try {
-    batch.delete(
-      db
-        .collection("following")
-        .doc(user.uid)
-        .collection("userFollowing")
-        .doc(profile.id)
-    );
-
-    batch.update(db.collection("users").doc(user.uid), {
-      followingCount: firebase.firestore.FieldValue.increment(-1),
+    batch.delete(doc(db, "following", user.uid, "userFollowing", profile.id));
+    batch.update(doc(db, "users", user.uid), {
+      followingCount: increment(-1),
     });
-
     return await batch.commit();
-  } catch (error) {
-    throw error;
+  } catch (e) {
+    throw e;
   }
 }
 
 //フォロワーを獲得するアクション
 export function getFollowersCollection(profileId) {
-  return db.collection("following").doc(profileId).collection("userFollowers");
+  return collection(db, "following", profileId, "userFollowers");
 }
+
 //フォローした人を獲得するアクション
 export function getFollowingCollection(profileId) {
-  return db.collection("following").doc(profileId).collection("userFollowing");
+  return collection(db, "following", profileId, "userFollowing");
 }
 
 //フォローしているIDをゲット
 export function getFollowingDoc(profileId) {
-  const userUid = firebase.auth().currentUser.uid;
-  return db
-    .collection("following")
-    .doc(userUid)
-    .collection("userFollowing")
-    .doc(profileId)
-    .get();
+  const userUid = auth.currentUser.uid;
+  return getDoc(doc(db, "following", userUid, "userFollowing", profileId));
 }

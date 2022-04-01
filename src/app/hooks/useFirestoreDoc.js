@@ -6,6 +6,7 @@ import {
   asyncActionStart,
 } from "../async/asyncReducer";
 import { dataFromSnapshot } from "../firestore/firestoreService";
+import { onSnapshot } from "firebase/firestore";
 
 //firestoreのDB取得→表示
 export default function useFirestoreDoc({
@@ -19,7 +20,7 @@ export default function useFirestoreDoc({
   useEffect(() => {
     if (!shouldExecute) return;
     dispatch(asyncActionStart());
-    const unsubscribe = query().onSnapshot(
+    const unsubscribe = onSnapshot(query(),
       (snapshot) => {
         //特定のページ以外のアクセス対応
         if (!snapshot.exists) {

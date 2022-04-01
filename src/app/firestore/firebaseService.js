@@ -1,35 +1,65 @@
-import firebase from "../config/firebase";
 import { setUserProfileData } from "./firestoreService";
 import { toast } from "react-toastify";
+import {
+  getAuth,
+  signInWithEmailAndPassword,
+  signOut,
+  createUserWithEmailAndPassword,
+  updateProfile,
+  FacebookAuthProvider,
+  GoogleAuthProvider,
+  signInWithPopup,
+  updatePassword,
+} from "firebase/auth";
+import {
+  getDatabase,
+  ref as fbRef,
+  push,
+  query,
+  orderByKey,
+  limitToLast,
+} from "firebase/database";
+import {
+  getStorage,
+  ref,
+  uploadBytesResumable,
+  deleteObject,
+} from "firebase/storage";
+import { app } from "../config/firebase";
+
+const auth = getAuth(app);
+const db = getDatabase(app);
+
 
 //firebaseオブジェクト配列
 export function firebaseObjectToArray(snapshot) {
-  return Object.entries(snapshot).map(
-    (e) => Object.assign({}, e[1], { id: e[0] })
-    //第一引数に無名オブジェクトを指定することで、コピーした内容の新規オブジェクトを作成できる。
+  if (snapshot) {
+    return Object.entries(snapshot).map((e) =>
+      Object.assign({}, e[1], { id: e[0] })
+    ); //第一引数に無名オブジェクトを指定することで、コピーした内容の新規オブジェクトを作成できる。
     //第二引数にe[1]を指定,第三引数id: e[0]を指定することで、一つのオブジェクトにまとめることができる(id= e[0])
-  );
+  }
 }
 
-//signIn
+//ログイン
 export function signInWithEmail(creds) {
-  return firebase
-    .auth()
-    .signInWithEmailAndPassword(creds.email, creds.password);
+  return signInWithEmailAndPassword(auth, creds.email, creds.password);
 }
 
-//signOut
+//ログアウト
 export function signOutFirebase() {
-  return firebase.auth().signOut();
+  return signOut(auth);
 }
 
-//register
+//新規登録
 export async function registerInFirebase(creds) {
   try {
-    const result = await firebase
-      .auth()
-      .createUserWithEmailAndPassword(creds.email, creds.password);
-    await result.user.updateProfile({
+    const result = await createUserWithEmailAndPassword(
+      auth,
+      creds.email,
+      creds.password
+    );
+    await updateProfile(result.user, {
       displayName: creds.displayName,
     });
     return await setUserProfileData(result.user);
@@ -42,15 +72,15 @@ export async function registerInFirebase(creds) {
 export async function socialLogin(selectedProvider) {
   let provider;
   if (selectedProvider === "facebook") {
-    provider = new firebase.auth.FacebookAuthProvider();
+    provider = new FacebookAuthProvider();
   }
   if (selectedProvider === "google") {
-    provider = new firebase.auth.GoogleAuthProvider();
+    provider = new GoogleAuthProvider();
   }
   try {
-    const result = await firebase.auth().signInWithPopup(provider);
+    const result = await signInWithPopup(auth, provider);
     console.log(result);
-    if (result.additionalUserInfo.isNewUser) {
+    if (result._tokenResponse.isNewUser) {
       await setUserProfileData(result.user);
     }
   } catch (error) {
@@ -60,36 +90,29 @@ export async function socialLogin(selectedProvider) {
 
 //パスワード更新
 export function updateUserPassword(creds) {
-  const user = firebase.auth().currentUser;
-  return user.updatePassword(creds.newPassword1);
+  const user = auth.currentUser;
+  return updatePassword(user, creds.newPassword1);
 }
 
-//storageへアップロード(ユーザー)
+//ユーザープロフをストレージにアップロード
 export function uploadToFirebaseStorage(file, filename) {
-  const user = firebase.auth().currentUser;
-  const storageRef = firebase.storage().ref();
-  return storageRef.child(`${user.uid}/user_images/${filename}`).put(file);
+  const user = auth.currentUser;
+  const storage = getStorage(app);
+  const storageRef = ref(storage, `${user.uid}/user_images/${filename}`);
+  return uploadBytesResumable(storageRef, file);
 }
 
-//storageへアップロード(イベント)
-export function uploadToFirebaseStorageOfCompany(file, filename) {
-  const user = firebase.auth().currentUser;
-  const storageRef = firebase.storage().ref();
-  return storageRef.child(`${user.uid}/company_images/${filename}`).put(file);
-}
-
-//storage削除
+//プロフ写真削除
 export function deleteFromFirebaseStorage(filename) {
-  //写真のidじゃなく名前を取得し削除する
-  const userUid = firebase.auth().currentUser.uid;
-  const storageRef = firebase.storage().ref();
-  const photoRef = storageRef.child(`${userUid}/user_images/${filename}`);
-  return photoRef.delete();
+  const userUid = auth.currentUser.uid;
+  const storage = getStorage(app);
+  const storageRef = ref(storage, `${userUid}/user_images/${filename}`);
+  return deleteObject(storageRef);
 }
 
-//チャット機能をDBに保存
+//チャット機能DBに保存
 export function addEventChatComment(eventId, values) {
-  const user = firebase.auth().currentUser;
+  const user = auth.currentUser;
   const newComment = {
     displayName: user.displayName,
     photoURL: user.photoURL,
@@ -98,16 +121,17 @@ export function addEventChatComment(eventId, values) {
     date: Date.now(),
     parentId: values.parentId,
   };
-  return firebase.database().ref(`chat/${eventId}`).push(newComment);
+  return push(fbRef(db, `chat/${eventId}`), newComment);
 }
 
 //DBからチャット内容を出力
 export function getEventChatRef(eventId) {
-  return firebase.database().ref(`chat/${eventId}`).orderByKey();
+  return query(fbRef(db, `chat/${eventId}`), orderByKey());
 }
 
 //フィードを出力
 export function getUserFeedRef() {
-  const user = firebase.auth().currentUser;
-  return firebase.database().ref(`posts/${user.uid}`).orderByKey().limitToLast(3);
+  const user = auth.currentUser;
+  if (!user) return;
+  return query(fbRef(db, `posts/${user.uid}`), orderByKey(), limitToLast(5));
 }
